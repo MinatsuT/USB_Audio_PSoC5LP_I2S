@@ -84,16 +84,21 @@ CY_ISR_PROTO(VdacDmaDone);
 /* Configuration for internal sampling clock adjustment. */
 #define adjustInterval              (10u)
 #define IDACadjustInterval          (10)
-#define adjustTic                   (5.0/100.0)
-#define UpperAdjustRange            (50)
-#define LowerAdjustRange            (-50)
+#define adjustTic                   (80.0/100.0)
+#define UpperAdjustRange            (-100)
+#define LowerAdjustRange            (+100)
 #define MovingAverageFactor         (0.1)
 #define SGN(x)                      (((x)<0) ? -1 : (((x)>0) ? 1 : 0))
 
-#define VDAC_HIGH                   254
-#define VDAC_LOW                    245
-#define VDAC_HIGHEST                254
-#define VDAC_LOWEST                 230
+#define Vctrl_HIGH                  30000
+#define Vctrl_LOW                   4000
+#define Vctrl_HIGHEST               30000
+#define Vctrl_LOWEST                4000
+
+#define Vctrl_Read()                PWM_ReadCompare()
+#define Vctrl_Write(x)              PWM_WriteCompare(x)
+#define Vctrl_Start()               PWM_Start()
+#define Vctrl_Stop()                PWM_Stop()
 
 /* Debug print buffer. */
 char dbuf[256];
@@ -112,7 +117,7 @@ struct _EZI2C_buf {
     uint16 inIndex;
     uint16 outIndex;
     uint8 idac;
-    uint8 vdac;
+    uint16 vctrl;
 } EZI2C_buf;
 
 /*
@@ -128,6 +133,8 @@ volatile uint8 flag = 0u;
 volatile uint16 dma_stop_count=0;
 volatile uint16 usb_drop_count=0;
 volatile int16 dma_usb_count=0;
+
+void vctrl_set(uint16 v);
 
 /*******************************************************************************
 * Function Name: main
@@ -177,9 +184,13 @@ int main()
     uint8 initialIdac;
     uint8 idac;
     float idacAdj=0;
-    uint8 initialVdac;
-    uint8 vdac;
-    float vdacAdj=0;
+    uint16 initialVctrl;
+    uint16 vctrl;
+    float vctrlAdj=0;
+    
+    uint16 vctrlAdjMax;
+    uint16 vctrlAdjMin;
+    int8 lastSwap=0;
 
     /* Start UART for debug print. */
     DP_Start();
@@ -193,16 +204,18 @@ int main()
     EZI2C_Start();
     
     /* Start VDAC for clock generator. */
-    VDAC_Start();
-    VDAC_SetValue((VDAC_HIGH+VDAC_HIGH)/2);
-    vdac=initialVdac=VDAC_Data;
+    Vctrl_Start();
+    //Vctrl_Write((Vctrl_HIGH+Vctrl_LOW)/2);
+    //Vctrl_Write(Vctrl_HIGH);
+    Vctrl_Write(8600);
+    vctrl=initialVctrl=Vctrl_Read();
 
     /* Start Comparator for clock generator. */
     CMP_Start();
 
     /* Start IDAC for clock generator. */
     IDAC_Start();
-    IDAC_SetValue(128);
+    //IDAC_SetValue(128);
     idac=initialIdac=IDAC_Data;
 
     /* Start VDAC8 to generate output wave. */
@@ -332,8 +345,8 @@ int main()
                 sprintf(dbuf,"Initial clockDivider=%d\n",initialClockDivider);dp(dbuf);
                 sprintf(dbuf,"BUFFER_SIZE=%d (%d)\n",BUFFER_SIZE,sHALF_BUFFER_SIZE);dp(dbuf);
                 sprintf(dbuf,"Sizeof(EZI2C_buf)=%d\n",sizeof(EZI2C_buf));dp(dbuf);
-                sprintf(dbuf,"initialVdac=%d\n",initialVdac);dp(dbuf);
-                sprintf(dbuf,"Vdac=%d\n",vdac);dp(dbuf);
+                sprintf(dbuf,"initialVctrl=%d\n",initialVctrl);dp(dbuf);
+                sprintf(dbuf,"Vctrl=%d\n",vctrl);dp(dbuf);
                 sprintf(dbuf,"initialIdac=%d\n",initialIdac);dp(dbuf);
                 sprintf(dbuf,"Idac=%d\n",idac);dp(dbuf);
 
@@ -387,6 +400,9 @@ int main()
                 clockAdjust = 0;                    
                 SampleClk_SetDividerRegister(clockDivider,0u);
 
+                vctrlAdjMax = Vctrl_HIGH;
+                vctrlAdjMin = Vctrl_LOW;
+                
                 sprintf(dbuf,"%4.1fkHz",fs/1000.0);
                 CharLCD_Position(1u, 0u);
                 CharLCD_PrintString(dbuf);
@@ -454,50 +470,79 @@ int main()
             //distAverage = ((long)distAverage*99ul + (long)dist*1ul)/(long)100ul;
             distAverage = distAverage*(1-MovingAverageFactor) + dist*MovingAverageFactor;
 
-            #if 1
-            /* Buffer over-run */
-            if (usb_drop_count>0) {
-                dma_usb_count++;
-            }
-            usb_drop_count=0;
-            
-            /* Buffer under-run */
-            if (dma_stop_count>0) {
-                dma_usb_count--;
-            }
-            dma_stop_count=0;
-            #endif
-            
-            /* Over-run for long time */
-            if (dma_usb_count>8) {
-                //idacAdj += 4;
-                idac += (idac<(255-1)) ? 1 : 0;
-                IDAC_SetValue(idac);
-                #if 0
-                IDACadjustIntervalCount=0u;
-                lastDistAverage=1;
-                distAverage=TRANSFER_SIZE*9;
-                adjustIntervalCount=adjustInterval;
+            if (syncDma==0u) {
+                usb_drop_count=0;
+                dma_stop_count=0;
+            } else {
+                #if 1
+                /* Buffer over-run */
+                if (usb_drop_count>0) {
+                    dma_usb_count++;
+                }
+                usb_drop_count=0;
+                
+                /* Buffer under-run */
+                if (dma_stop_count>0) {
+                    dma_usb_count--;
+                }
+                dma_stop_count=0;
                 #endif
-                lastDistAverage=0;
-                dp("U");
-                dma_usb_count -= 1;                
-            }
+            
+                /* Over-run for long time */
+                if (dma_usb_count>8) {
+                    //idacAdj += 4;
+                    //idac += (idac<(255-1)) ? 1 : 0;
+                    //IDAC_SetValue(idac);
+                    #if 0
+                    IDACadjustIntervalCount=0u;
+                    lastDistAverage=1;
+                    distAverage=TRANSFER_SIZE*9;
+                    adjustIntervalCount=adjustInterval;
+                    #endif
+                    //lastDistAverage=0;
+                    #if 1
+                    //if (lastSwap!=1 && vctrlAdjMax > vctrlAdjMin) {
+                    if (vctrlAdjMax > vctrlAdjMin && (vctrl-128) > vctrlAdjMin ) {
+                        vctrlAdjMax = vctrl;
+                        //vctrlAdj = vctrlAdjMin + (vctrlAdjMax-vctrlAdjMin)*0.1 - initialVctrl;
+                        vctrlAdj -= 128;
+                        vctrl = initialVctrl+vctrlAdj;
+                        vctrl_set(vctrl);
+                        sprintf(dbuf,"U Min=%d Max=%d V=%d\n",vctrlAdjMin,vctrlAdjMax,vctrl);dp(dbuf);
+                        lastSwap=1;
+                    }
+                    dma_usb_count = 8;
+                    //dp("U");
+                    //sprintf(dbuf,"U VC I=%d V=%d\r",idac,vctrl);dp(dbuf);
+                    #endif
+                }
 
-            /* Under-run for long time */
-            if (dma_usb_count<-8) {
-                //idacAdj -= 4;
-                idac -= (idac>(5+1)) ? 1 : 0;
-                IDAC_SetValue(idac);
-                #if 0
-                IDACadjustIntervalCount=0u;
-                lastDistAverage=TRANSFER_SIZE*NUM_OF_BUFFERS;
-                distAverage=TRANSFER_SIZE*1;
-                adjustIntervalCount=adjustInterval;
-                #endif
-                lastDistAverage=0;
-                dp("D");
-                dma_usb_count += 1;
+                /* Under-run for long time */
+                if (dma_usb_count<-8) {
+                    //idacAdj -= 4;
+                    //idac -= (idac>(5+1)) ? 1 : 0;
+                    //IDAC_SetValue(idac);
+                    #if 0
+                    IDACadjustIntervalCount=0u;
+                    lastDistAverage=TRANSFER_SIZE*NUM_OF_BUFFERS;
+                    distAverage=TRANSFER_SIZE*1;
+                    adjustIntervalCount=adjustInterval;
+                    #endif
+                    //lastDistAverage=0;
+                    //if (lastSwap!=-1 && vctrlAdjMin < vctrlAdjMax) {
+                    if (vctrlAdjMin < vctrlAdjMax && (vctrl+128) < vctrlAdjMax ) {
+                        vctrlAdjMin = vctrl;
+                        //vctrlAdj = vctrlAdjMin + (vctrlAdjMax-vctrlAdjMin)*0.9 - initialVctrl;
+                        vctrlAdj += 128;
+                        vctrl = initialVctrl+vctrlAdj;
+                        vctrl_set(vctrl);
+                        sprintf(dbuf,"D Min=%d Max=%d V=%d\n",vctrlAdjMin,vctrlAdjMax,vctrl);dp(dbuf);
+                        lastSwap=-1;
+                    }
+                    dma_usb_count = -8;
+                    //dp("D");
+                    //sprintf(dbuf,"VC I=%d V=%d\r",idac,vctrl);dp(dbuf);
+                }
             }
 
             /* Internal sampling clock adjustment. */
@@ -506,15 +551,15 @@ int main()
                 distAvDiff = distAverage - lastDistAverage;
                 
                 /* If buffered size is over half and still increasing, then faster the clock (decrease the divider). */
-                if ( distAverage > (sHALF_BUFFER_SIZE+UpperAdjustRange) && distAvDiff>0 ) {
+                if ( distAverage > (sHALF_BUFFER_SIZE+UpperAdjustRange) && ((distAvDiff>=0) +0) ) {
                     //idacAdj += adjustTic;
-                    vdacAdj -= adjustTic;
+                    vctrlAdj -= adjustTic;
                     clockAdjust -= adjustTic;
                 }
                 /* If buffered size is under half and still decreasing, then slower the clock (increase the divider). */
-                if ( distAverage < (sHALF_BUFFER_SIZE+LowerAdjustRange) && distAvDiff<0 ) {
+                if ( distAverage < (sHALF_BUFFER_SIZE+LowerAdjustRange) && ((distAvDiff<=0) +0) ) {
                     //idacAdj -= adjustTic;
-                    vdacAdj += adjustTic;
+                    vctrlAdj += adjustTic;
                     clockAdjust += adjustTic;
                 }
 
@@ -529,27 +574,29 @@ int main()
                 }
                 #endif
             
-                uint8 tmpVdac = initialVdac+(int8)vdacAdj;
-                if (tmpVdac<=VDAC_LOW) {
-                    vdacAdj += 5;
+                uint16 tmpVctrl = initialVctrl+vctrlAdj;
+                #if 0
+                if (tmpVctrl<=Vctrl_LOW) {
+                    vctrlAdj += 5;
                     idac += (idac<254) ? 1 : 0;
                     IDAC_SetValue(idac);
                     dp("+");
                 }
-                if (tmpVdac>=VDAC_HIGH) {
-                    vdacAdj -= 5;
+                if (tmpVctrl>=Vctrl_HIGH) {
+                    vctrlAdj -= 5;
                     idac -= (idac>5) ? 1 : 0;
                     IDAC_SetValue(idac);
                     dp("-");
                 }
+                #endif
 
-                tmpVdac = initialVdac+(int8)vdacAdj;
-                if (vdac != tmpVdac) {
-                    vdac = tmpVdac;
+                tmpVctrl = initialVctrl+vctrlAdj;
+                if (vctrl != tmpVctrl) {
+                    vctrl = tmpVctrl;
 
-                    vdac = (vdac<VDAC_LOWEST) ? VDAC_LOWEST : vdac;
-                    vdac = (vdac>VDAC_HIGHEST) ? VDAC_HIGHEST : vdac;
-                    VDAC_SetValue(vdac);
+                    vctrl = (vctrl<Vctrl_LOWEST) ? Vctrl_LOWEST : vctrl;
+                    vctrl = (vctrl>Vctrl_HIGHEST) ? Vctrl_HIGHEST : vctrl;
+                    Vctrl_Write(vctrl);
                   
                     #if 0
                     if (++IDACadjustIntervalCount>=IDACadjustInterval) {
@@ -560,7 +607,7 @@ int main()
                     }
                     #endif
 
-                    sprintf(dbuf,"I=%d V=%d\r",idac,vdac);dp(dbuf);
+                    sprintf(dbuf,"I=%d V=%d \r",idac,vctrl);dp(dbuf);
                 }
 
                                     
@@ -591,7 +638,7 @@ int main()
                 EZI2C_buf.outIndex      = outIndex*TRANSFER_SIZE;
                 EZI2C_buf.flag          = flag;
                 EZI2C_buf.idac          = idac;
-                EZI2C_buf.vdac          = vdac;
+                EZI2C_buf.vctrl          = vctrl;
             }
                 
             /* When internal sampling clock is slower than PC traffic and buffer is likely over-run,
@@ -650,5 +697,10 @@ CY_ISR(VdacDmaDone)
     
 }
 
+void vctrl_set(uint16 v) {
+    v = (v<Vctrl_LOWEST) ? Vctrl_LOWEST : v;
+    v = (v>Vctrl_HIGHEST) ? Vctrl_HIGHEST : v;
+    Vctrl_Write(v);
+}
 
 /* [] END OF FILE */
