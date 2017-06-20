@@ -1,0 +1,25 @@
+#
+# .gitignore file for PSoC Creator 4.0
+#
+
+# User preferences
+*.cyprj.*
+*.cywrk.*
+
+# Log files
+*.log
+
+# Temp directry
+*.cydsn/codegentemp/*
+
+# Automatically generated files
+*.cydsn/Generated_Source/*
+*.cydsn/CortexM3/*
+*.cydsn/ARM_GCC_*
+*.cydsn/Export/*
+*.cycdx
+*.cyfit
+*.rpt
+*.svd
+*timing.html
+
