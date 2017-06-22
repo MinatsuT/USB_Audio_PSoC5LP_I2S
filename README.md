@@ -14,7 +14,7 @@ Features:
 - External I2S DAC with self MASTER CLOCK generation capability [optional]
 - 16x2 Character LCD (LCD1602) with I2C backpack [optional]
 
-# Pin assign and parts connection
+# Pin assignment and parts connection
 <pre>
 P0[6] --- Speaker L
 P0[7] --- Speaker R
