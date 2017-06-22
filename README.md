@@ -11,7 +11,7 @@ Features:
 - PSoC5LP Prototyping Kit (CY8CKIT-059)
 - Capacitors: C1(100pF), C2(1uF)
 - Resister: R1(100k Ohm)
-- External I2S DAC with self MASTER CLOCK generation capability [optional]
+- 3.3V logic external I2S DAC with self MASTER CLOCK generation capability [optional]
 - 16x2 Character LCD (LCD1602) with I2C backpack [optional]
 
 # Pin assignment and parts connection
