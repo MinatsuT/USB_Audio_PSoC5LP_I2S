@@ -3,7 +3,7 @@ This is an improved version of [CE95390 - USB Audio with PSoC 3/5LP](http://www.
 
 Features:
 - Internal DAC and I2S outputs are supported. Both of them sound simultaneously.
-- Sampling rate: 32kHz - 96kHz
+- Sampling rate: 44.1kHz - 96kHz
 - Bit depth: 16-bit (Actual audio output via internal DAC is 8bit.)
 - Audio channel: Stereo (No mono support.)
 
