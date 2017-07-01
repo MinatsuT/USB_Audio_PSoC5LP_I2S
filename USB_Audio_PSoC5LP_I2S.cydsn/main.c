@@ -129,7 +129,6 @@ volatile uint8 flag = 0u;
 
 uint32 currentFs();
 void initDMAs();
-void resetDMAs();
 
 /*******************************************************************************
 * Function Name: main
@@ -248,7 +247,7 @@ int main() {
     for (;;) {
         /* Check if configuration or interface settings are changed. */
         if (0u != USBFS_IsConfigurationChanged()) {
-            sprintf(dbuf, "[USB Configuration Changed]\n"); dp(dbuf);
+            dp("[USB Configuration Changed]");
 
             /* Check active alternate setting. */
             if ( (0u != USBFS_GetConfiguration()) && (0u != USBFS_GetInterfaceSetting(AUDIO_INTERFACE)) ) {
@@ -274,15 +273,12 @@ int main() {
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio ON ");
-                sprintf(dbuf, "Audio [ON].\n"); dp(dbuf);
+                dp(" Audio=[ON]");
             } else {
                 /* Alternate settings 0: Audio is not streaming (mute). */
 
                 /* Stop VCO to stop DMA transfer. */
                 IDAC_Stop();
-
-                /* Reset DMAs */
-                resetDMAs();
 
                 /* Reset VDAC output level. */
                 VDAC8_L_Data = 128u;
@@ -290,7 +286,7 @@ int main() {
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio OFF");
-                sprintf(dbuf, "Audio [OFF].\n"); dp(dbuf);
+                dp(" Audio=[OFF]");
             }
 
             /* Check if sample frequency is changed by host. */
@@ -303,8 +299,10 @@ int main() {
                 sprintf(dbuf, "%4.1fkHz", fs/1000.0);
                 CharLCD_Position(1u, 0u);
                 CharLCD_PrintString(dbuf);
-                sprintf(dbuf, "Changed to %4.1fkHz.\n", fs/1000.0); dp(dbuf);
+                sprintf(dbuf, " Freq=[%4.1fkHz]", fs/1000.0); dp(dbuf);
             }
+            
+            dp("\n");
         }
 
         /* Check if EP buffer is full. */
@@ -342,7 +340,7 @@ int main() {
                     IDAC_Start();
 
                     CyDmaChStatus(VdacOutDmaCh_L, &td, NULL);
-                    sprintf(dbuf, "DMA Clock START td=%d dist=%d\n", td, dist); dp(dbuf);
+                    sprintf(dbuf, "\nDMA Clock START td=%d dist=%d\n", td, dist); dp(dbuf);
                 }
             } else {
                 /* Ignore received data from host and arm OUT endpoint
@@ -492,7 +490,6 @@ uint32 currentFs() {
     uint32 fs = USBFS_currentSampleFrequency[OUT_EP_NUM][0] +
                 (USBFS_currentSampleFrequency[OUT_EP_NUM][1]<<8) +
                 (USBFS_currentSampleFrequency[OUT_EP_NUM][2]<<16);
-    sprintf(dbuf, "Fs=%4.1fkHz.\n", fs/1000.0); dp(dbuf);
     return fs;
 }
 
@@ -555,90 +552,6 @@ void initDMAs() {
     CyDmaChEnable(VdacOutDmaCh_L, VDAC_DMA_ENABLE_PRESERVE_TD);
     CyDmaChEnable(VdacOutDmaCh_R, VDAC_DMA_ENABLE_PRESERVE_TD);
     CyDmaChEnable(I2SDmaCh, I2S_DMA_ENABLE_PRESERVE_TD);
-}
-
-void resetDMAs() {
-    #if 0
-    uint8 td;
-    CyDmaChStatus(VdacOutDmaCh_L, &td, NULL);
-    sprintf(dbuf, "Before stop: outidx=%d TD=%d\n", outIndex, td); dp(dbuf);
-
-    I2S_Stop();
-    I2S_ClearTxFIFO();
-
-    #if 0
-    CyDmaClearPendingDrq(VdacOutDmaCh_L);
-    CyDmaClearPendingDrq(VdacOutDmaCh_R);
-    CyDmaClearPendingDrq(I2SDmaCh);
-    #endif
-
-    #if 0
-    CyDmaChSetRequest(VdacOutDmaCh_L, CPU_TERM_TD);
-    CyDmaChSetRequest(VdacOutDmaCh_R, CPU_TERM_TD);
-    CyDmaChSetRequest(I2SDmaCh, CPU_TERM_TD);
-    #endif
-
-    #if 0
-    /* Stop DMA operation. */
-    CyDmaChDisable(VdacOutDmaCh_L);
-    CyDmaChDisable(VdacOutDmaCh_R);
-    CyDmaChDisable(I2SDmaCh);
-    #endif
-
-    #if 0
-    uint8 i;
-    /* Configure DMA transfer descriptors. */
-    for (i = 0u; i < (NUM_OF_BUFFERS - 1u); ++i) {
-        /* Chain current and next DMA transfer descriptors to be in row. */
-        CyDmaTdSetConfiguration(VdacOutDmaTd_L[i], TRANSFER_SIZE, VdacOutDmaTd_L[i + 1u],
-                                (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
-        CyDmaTdSetConfiguration(VdacOutDmaTd_R[i], TRANSFER_SIZE, VdacOutDmaTd_R[i + 1u],
-                                (TD_INC_SRC_ADR));
-        CyDmaTdSetConfiguration(I2SDmaTd[i], I2S_TRANSFER_SIZE, I2SDmaTd[i + 1u],
-                                (TD_INC_SRC_ADR));
-    }
-    /* Chain last and 1st DMA transfer descriptors to make cyclic buffer. */
-    CyDmaTdSetConfiguration(VdacOutDmaTd_L[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_L[0u],
-                            (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
-    CyDmaTdSetConfiguration(VdacOutDmaTd_R[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_R[0u],
-                            (TD_INC_SRC_ADR));
-    CyDmaTdSetConfiguration(I2SDmaTd[NUM_OF_BUFFERS - 1u], I2S_TRANSFER_SIZE, I2SDmaTd[0u],
-                            (TD_INC_SRC_ADR));
-
-    for (i = 0u; i < NUM_OF_BUFFERS; i++) {
-        /* Set source and destination addresses. */
-        CyDmaTdSetAddress(VdacOutDmaTd_L[i], LO16((uint32) &soundBuffer_L[i * TRANSFER_SIZE]),
-                          LO16((uint32) VDAC8_L_Data_PTR));
-        CyDmaTdSetAddress(VdacOutDmaTd_R[i], LO16((uint32) &soundBuffer_R[i * TRANSFER_SIZE]),
-                          LO16((uint32) VDAC8_R_Data_PTR));
-        CyDmaTdSetAddress(I2SDmaTd[i], LO16((uint32) &soundBuffer_I2S[i * I2S_TRANSFER_SIZE]),
-                          LO16((uint32) I2S_TX_CH0_F0_PTR));
-    }
-    #endif
-
-    CyDmaChSetInitialTd(VdacOutDmaCh_L, VdacOutDmaTd_L[0u]);
-    CyDmaChSetInitialTd(VdacOutDmaCh_R, VdacOutDmaTd_R[0u]);
-    CyDmaChSetInitialTd(I2SDmaCh, I2SDmaTd[0u]);
-    outIndex = 0u;
-
-    /* Start DMA operation. */
-    CyDmaChEnable(VdacOutDmaCh_L, VDAC_DMA_ENABLE_PRESERVE_TD);
-    CyDmaChEnable(VdacOutDmaCh_R, VDAC_DMA_ENABLE_PRESERVE_TD);
-    CyDmaChEnable(I2SDmaCh, I2S_DMA_ENABLE_PRESERVE_TD);
-
-    #if 0
-    /* Set initial TD. */
-    setInitialTD();
-    #endif
-
-    CyDmaChStatus(VdacOutDmaCh_L, &td, NULL);
-    sprintf(dbuf, "After stop: outidx=%d TD=%d\n", outIndex, td); dp(dbuf);
-    inIndex = outIndex*TRANSFER_SIZE;
-
-    I2S_initVar = 0;
-    I2S_Start();
-    I2S_EnableTx();
-    #endif
 }
 
 /* [] END OF FILE */
