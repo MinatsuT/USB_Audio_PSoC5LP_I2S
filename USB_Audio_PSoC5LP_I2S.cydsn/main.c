@@ -127,7 +127,10 @@ volatile uint8 flag = 0u;
 #define DMA_STOP_FLAG            (1u<<1)
 #define USB_DROP_FLAG            (1u<<2)
 
-void vctrl_set(uint16 v);
+uint32 currentFs();
+void initDMAs();
+void resetDMAs();
+void setInitialTD();
 
 /*******************************************************************************
 * Function Name: main
@@ -177,8 +180,8 @@ int main() {
     uint16 lastVcoCount = 0;
     uint16 vcoCount = 0;
     float vcoFreq = 0;
-    uint8 printCount = 0;
-
+    uint8 vcoCountWait=0;
+    
     uint8 freqCtrlCount = 0;
 
     /* Start UART for debug print. */
@@ -207,72 +210,15 @@ int main() {
     /* Start Comparator for clock generator. */
     CMP_Start();
 
-    /* Start IDAC for clock generator. */
-    IDAC_Start();
-
     /* Start VDAC8 to generate output wave. */
     VDAC8_L_Start();
     VDAC8_R_Start();
 
-    /* Initialize DMA channel. */
-    VdacOutDmaCh_L = VdacDma_L_DmaInitialize(VDAC_DMA_BYTES_PER_BURST, VDAC_DMA_REQUEST_PER_BURST,
-                                             HI16(VDAC_DMA_SRC_BASE), HI16(VDAC_DMA_DST_BASE));
-    VdacOutDmaCh_R = VdacDma_R_DmaInitialize(VDAC_DMA_BYTES_PER_BURST, VDAC_DMA_REQUEST_PER_BURST,
-                                             HI16(VDAC_DMA_SRC_BASE), HI16(VDAC_DMA_DST_BASE));
-    I2SDmaCh = I2S_DMA_DmaInitialize(I2S_DMA_BYTES_PER_BURST, I2S_DMA_REQUEST_PER_BURST,
-                                     HI16(I2S_DMA_SRC_BASE), HI16(I2S_DMA_DST_BASE));
-
-    /* Allocate transfer descriptors for each buffer chunk. */
-    for (i = 0u; i < NUM_OF_BUFFERS; ++i) {
-        VdacOutDmaTd_L[i] = CyDmaTdAllocate();
-        VdacOutDmaTd_R[i] = CyDmaTdAllocate();
-        I2SDmaTd[i] = CyDmaTdAllocate();
-    }
-
-    /* Configure DMA transfer descriptors. */
-    for (i = 0u; i < (NUM_OF_BUFFERS - 1u); ++i) {
-        /* Chain current and next DMA transfer descriptors to be in row. */
-        CyDmaTdSetConfiguration(VdacOutDmaTd_L[i], TRANSFER_SIZE, VdacOutDmaTd_L[i + 1u],
-                                (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
-        CyDmaTdSetConfiguration(VdacOutDmaTd_R[i], TRANSFER_SIZE, VdacOutDmaTd_R[i + 1u],
-                                (TD_INC_SRC_ADR));
-        CyDmaTdSetConfiguration(I2SDmaTd[i], I2S_TRANSFER_SIZE, I2SDmaTd[i + 1u],
-                                (TD_INC_SRC_ADR | I2S_DMA_TD_TERMOUT_EN));
-    }
-    /* Chain last and 1st DMA transfer descriptors to make cyclic buffer. */
-    CyDmaTdSetConfiguration(VdacOutDmaTd_L[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_L[0u],
-                            (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
-    CyDmaTdSetConfiguration(VdacOutDmaTd_R[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_R[0u],
-                            (TD_INC_SRC_ADR));
-    CyDmaTdSetConfiguration(I2SDmaTd[NUM_OF_BUFFERS - 1u], I2S_TRANSFER_SIZE, I2SDmaTd[0u],
-                            (TD_INC_SRC_ADR | I2S_DMA_TD_TERMOUT_EN));
-
-
-    for (i = 0u; i < NUM_OF_BUFFERS; i++) {
-        /* Set source and destination addresses. */
-        CyDmaTdSetAddress(VdacOutDmaTd_L[i], LO16((uint32) &soundBuffer_L[i * TRANSFER_SIZE]),
-                          LO16((uint32) VDAC8_L_Data_PTR));
-        CyDmaTdSetAddress(VdacOutDmaTd_R[i], LO16((uint32) &soundBuffer_R[i * TRANSFER_SIZE]),
-                          LO16((uint32) VDAC8_R_Data_PTR));
-        CyDmaTdSetAddress(I2SDmaTd[i], LO16((uint32) &soundBuffer_I2S[i * I2S_TRANSFER_SIZE]),
-                          LO16((uint32) I2S_TX_CH0_F0_PTR));
-    }
-
-    /* Set 1st transfer descriptor to execute. */
-    CyDmaChSetInitialTd(VdacOutDmaCh_L, VdacOutDmaTd_L[0u]);
-    CyDmaChSetInitialTd(VdacOutDmaCh_R, VdacOutDmaTd_R[0u]);
-    CyDmaChSetInitialTd(I2SDmaCh, I2SDmaTd[0u]);
+    /* Initialize DMAs. */            
+    initDMAs();
 
     /* Start DMA completion interrupt. */
     VdacDmaDone_StartEx(&VdacDmaDone);
-
-    /* Stop VCO before start DMAs */
-    IDAC_Stop();
-
-    /* Start DMA operation. */
-    CyDmaChEnable(VdacOutDmaCh_L, VDAC_DMA_ENABLE_PRESERVE_TD);
-    CyDmaChEnable(VdacOutDmaCh_R, VDAC_DMA_ENABLE_PRESERVE_TD);
-    CyDmaChEnable(I2SDmaCh, I2S_DMA_ENABLE_PRESERVE_TD);
 
     /* Enable global interrupts. */
     CyGlobalIntEnable;
@@ -308,9 +254,6 @@ int main() {
             if ( (0u != USBFS_GetConfiguration()) && (0u != USBFS_GetInterfaceSetting(AUDIO_INTERFACE)) ) {
                 /* Alternate settings 1: Audio is streaming. */
 
-                /* Stop VCO to stop DMA clock */
-                IDAC_Stop();
-
                 /* Reset VDAC output level. */
                 VDAC8_L_Data = 128u;
                 VDAC8_R_Data = 128u;
@@ -319,11 +262,12 @@ int main() {
                 syncDma = 0u;
                 skipNextOut = 0u;
                 adjustIntervalCount = 0u;
-                lastDistAverage = distAverage = 0;;
-                distAvDiff = 0;
-                vctrlAdj = 0;
-                vctrl = initialVctrl;
+                lastVcoCount=0;
+                vcoCountWait=4;
                 vcoFreq = 0;
+               
+                /* Get current sampling frequency. */
+                fs = (fs==0) ? currentFs() : fs;
 
                 /* Enable OUT endpoint to receive audio stream. */
                 USBFS_EnableOutEP(OUT_EP_NUM);
@@ -334,30 +278,18 @@ int main() {
             } else {
                 /* Alternate settings 0: Audio is not streaming (mute). */
 
-                /* Stop VCO and cancel pending transfer. */
+                /* Stop VCO to stop DMA transfer. */
                 IDAC_Stop();
 
-                CyDmaClearPendingDrq(VdacOutDmaCh_L);
-                CyDmaClearPendingDrq(VdacOutDmaCh_R);
-                CyDmaChSetRequest(VdacOutDmaCh_L, CPU_TERM_TD);
-                CyDmaChSetRequest(VdacOutDmaCh_R, CPU_TERM_TD);
-
-                /* Find current TD. */
-                CyDmaChStatus(VdacOutDmaCh_L, &td, NULL);
-                for (i = 0u; i < NUM_OF_BUFFERS; ++i) {
-                    if (VdacOutDmaTd_L[i] == td) break;
-                }
-                outIndex = i;
-                inIndex = outIndex*TRANSFER_SIZE;
-                distAverage = dist = BUFFER_SIZE/2u;;
-
+                /* Reset DMAs */
+                resetDMAs();
+                
                 /* Reset VDAC output level. */
                 VDAC8_L_Data = 128u;
                 VDAC8_R_Data = 128u;
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio OFF");
-                //PrintEvent_Disable();
                 sprintf(dbuf, "Audio [OFF].\n"); dp(dbuf);
             }
 
@@ -366,9 +298,7 @@ int main() {
                 USBFS_frequencyChanged = 0u;
 
                 /* Get current sampling frequency. */
-                fs = USBFS_currentSampleFrequency[OUT_EP_NUM][0] +
-                     (USBFS_currentSampleFrequency[OUT_EP_NUM][1]<<8) +
-                     (USBFS_currentSampleFrequency[OUT_EP_NUM][2]<<16);
+                fs = currentFs();
 
                 sprintf(dbuf, "%4.1fkHz", fs/1000.0);
                 CharLCD_Position(1u, 0u);
@@ -379,7 +309,7 @@ int main() {
 
         /* Check if EP buffer is full. */
         if (USBFS_OUT_BUFFER_FULL == USBFS_GetEPState(OUT_EP_NUM)) {
-            if (0u == skipNextOut) {
+             if (0u == skipNextOut) {
                 readSize = USBFS_GetEPCount(OUT_EP_NUM);
                 /* Trigger DMA to copy data from OUT endpoint buffer. */
                 USBFS_ReadOutEP(OUT_EP_NUM, tmpEpBuf, readSize);
@@ -400,17 +330,13 @@ int main() {
                     soundBuffer_I2S[inIndex*I2S_DATA_SIZE+3] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*j +2];
                     inIndex = (inIndex+1) % BUFFER_SIZE;
                 }
-
                 dist = (inIndex - outIndex*TRANSFER_SIZE+BUFFER_SIZE)%BUFFER_SIZE;
-
-                if (syncDma == 0u) {
-                    distAverage = dist;
-                }
 
                 /* Enable DMA transfers when sound buffer is half-full. */
                 if ((0u == syncDma) && (dist >= sHALF_BUFFER_SIZE)) {
                     /* Disable underflow delayed start. */
                     syncDma = 1u;
+                    lastDistAverage = distAverage = dist;
 
                     /* Start VCO to start DMA transfer. */
                     IDAC_Start();
@@ -431,63 +357,75 @@ int main() {
             distAverage = distAverage*(1-MovingAverageWeight) + dist*MovingAverageWeight;
 
             /* Clock adjustment. */
-            if (syncDma == 1u && ++adjustIntervalCount >= adjustInterval) {
-                if (lastDistAverage == 0) lastDistAverage = distAverage;
-                distAvDiff = distAverage - lastDistAverage;
+            if (syncDma == 1u) {
+                if (++adjustIntervalCount >= adjustInterval) {
+                    if (lastDistAverage == 0) lastDistAverage = distAverage;
+                    distAvDiff = distAverage - lastDistAverage;
 
-                if (++freqCtrlCount > 5) {
-                    freqCtrlCount = 0;
-                    float d = vcoFreq-fs;
-                    if (vcoFreq != 0) {
-                        if ( fabs(d/fs) > 0.01) {
-                            /* Rapid (coarse) frequency adjustment. */
-                            vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.3;
-                            dp("0");
-                        } else if ( fabs(d/fs) > 0.005) {
-                            /* Slower (fine) frequency adjustment. */
-                            vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.03;
-                            dp("1");
-                        } else {
-                            /* Precise frequency adjustment. */
-                            vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.02;
+                    if (++freqCtrlCount > 5) {
+                        freqCtrlCount = 0;
+                        if (fs>1 && vcoFreq > 1) {
+                            float d = vcoFreq-fs;
+                            if ( fabs(d/fs) > (1/100.0)) {
+                                /* Rapid (coarse) frequency adjustment. */
+                                vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.3;
+                                dp("0");
+                                #if 0
+                                sprintf(dbuf,"fs=%f ", fs); dp(dbuf);
+                                sprintf(dbuf,"initialVctrl=%d vctrlAdj=%f ", initialVctrl,vctrlAdj); dp(dbuf);
+                                sprintf(dbuf,"vcoFreq=%f vctrl=%f\n", vcoFreq,initialVctrl+vctrlAdj); dp(dbuf);
+                                #endif
+                            } else if ( fabs(d/fs) > (1/200.0)) {
+                                /* Slower (fine) frequency adjustment. */
+                                vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.03;
+                                dp("1");
+                            } else {
+                                /* Precise frequency adjustment. */
+                                vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.02;
 
-                            clockAdjust = 0;
-                            /* Buffered size based precise adjustment. */
-                            /* If buffered size is over half and still increasing, then faster the clock (decrease the divider). */
-                            if ( distAverage > (sHALF_BUFFER_SIZE+UpperAdjustRange)) {
-                                vctrlAdj -= adjustTic;
-                                clockAdjust = UpperAdjustRange;
-                            }
-                            /* If buffered size is under half and still decreasing, then slower the clock (increase the divider). */
-                            if ( distAverage < (sHALF_BUFFER_SIZE+LowerAdjustRange)) {
-                                vctrlAdj += adjustTic;
-                                clockAdjust = LowerAdjustRange;
+                                clockAdjust = 0;
+                                #if 1
+                                /* Buffered size based precise adjustment. */
+                                /* If buffered size is over half and still increasing, then faster the clock (decrease the divider). */
+                                if ( distAverage > (sHALF_BUFFER_SIZE+UpperAdjustRange)) {
+                                    vctrlAdj -= adjustTic;
+                                    clockAdjust = UpperAdjustRange;
+                                }
+                                /* If buffered size is under half and still decreasing, then slower the clock (increase the divider). */
+                                if ( distAverage < (sHALF_BUFFER_SIZE+LowerAdjustRange)) {
+                                    vctrlAdj += adjustTic;
+                                    clockAdjust = LowerAdjustRange;
+                                }
+                                #endif
                             }
                         }
                     }
-                }
 
-                uint16 tmpVctrl = initialVctrl+vctrlAdj;
-                if (vctrl != tmpVctrl) {
-                    vctrl = tmpVctrl;
+                    uint16 tmpVctrl = initialVctrl+vctrlAdj;
+                    if (vctrl != tmpVctrl) {
+                        vctrl = tmpVctrl;
 
-                    vctrl = (vctrl < Vctrl_LOWEST) ? Vctrl_LOWEST : vctrl;
-                    vctrl = (vctrl > Vctrl_HIGHEST) ? Vctrl_HIGHEST : vctrl;
-                    Vctrl_Write(vctrl);
-
-                    if (++printCount > 100) {
-                        printCount = 0;
+                        vctrl = (vctrl < Vctrl_LOWEST) ? Vctrl_LOWEST : vctrl;
+                        vctrl = (vctrl > Vctrl_HIGHEST) ? Vctrl_HIGHEST : vctrl;
+                        Vctrl_Write(vctrl);
                     }
+
+                    lastDistAverage = distAverage;
+                    adjustIntervalCount = 0u;
                 }
-
-                lastDistAverage = distAverage;
-                adjustIntervalCount = 0u;
             }
-
+            
+            /* Measure VCO Frequency. */
             vcoCount = VCO_Counter_COUNTER_LSB;
-            vcoFreq = vcoFreq*0.9 + (( (uint32)vcoCount - (uint32)lastVcoCount + 65536ul)%65536ul)*1000/64.0*0.1;
+            float tmpVcoFreq = (((uint32)vcoCount - (uint32)lastVcoCount + 65536ul)%65536ul)*1000/64.0;
+            if (tmpVcoFreq>0) {
+                vcoCountWait -= (vcoCountWait > 0u) ? 1u : 0u;
+                if (vcoCountWait==0u) {
+                    vcoFreq = (vcoFreq==0) ? tmpVcoFreq : vcoFreq*0.9 + tmpVcoFreq*0.1;
+                }
+            }
             lastVcoCount = vcoCount;
-
+            
             /* If EZI2C is idle, then update monitoring values. */
             if ( (EZI2C_GetActivity() & EZI2C_STATUS_BUSY) == 0u ) {
                 EZI2C_buf.dist = dist;
@@ -504,7 +442,7 @@ int main() {
              * then skip next transfer from PC.
              */
             if ( dist > TRANSFER_SIZE*8u ) {
-                skipNextOut = 1u;
+                //skipNextOut = 1u;
                 flag |= USB_DROP_FLAG;
             } else {
                 flag &= ~USB_DROP_FLAG;
@@ -553,10 +491,98 @@ CY_ISR(VdacDmaDone) {
 
 }
 
-void vctrl_set(uint16 v) {
-    v = (v < Vctrl_LOWEST) ? Vctrl_LOWEST : v;
-    v = (v > Vctrl_HIGHEST) ? Vctrl_HIGHEST : v;
-    Vctrl_Write(v);
+uint32 currentFs() {
+    uint32 fs = USBFS_currentSampleFrequency[OUT_EP_NUM][0] +
+    (USBFS_currentSampleFrequency[OUT_EP_NUM][1]<<8) +
+    (USBFS_currentSampleFrequency[OUT_EP_NUM][2]<<16);
+    sprintf(dbuf, "Fs=%4.1fkHz.\n", fs/1000.0); dp(dbuf);
+    return fs;
 }
+    
+void initDMAs() {
+    uint8 i;
+    
+    /* Initialize DMA channel. */
+    VdacOutDmaCh_L = VdacDma_L_DmaInitialize(VDAC_DMA_BYTES_PER_BURST, VDAC_DMA_REQUEST_PER_BURST,
+                                             HI16(VDAC_DMA_SRC_BASE), HI16(VDAC_DMA_DST_BASE));
+    VdacOutDmaCh_R = VdacDma_R_DmaInitialize(VDAC_DMA_BYTES_PER_BURST, VDAC_DMA_REQUEST_PER_BURST,
+                                             HI16(VDAC_DMA_SRC_BASE), HI16(VDAC_DMA_DST_BASE));
+    I2SDmaCh = I2S_DMA_DmaInitialize(I2S_DMA_BYTES_PER_BURST, I2S_DMA_REQUEST_PER_BURST,
+                                     HI16(I2S_DMA_SRC_BASE), HI16(I2S_DMA_DST_BASE));
+
+    /* Allocate transfer descriptors for each buffer chunk. */
+    for (i = 0u; i < NUM_OF_BUFFERS; ++i) {
+        VdacOutDmaTd_L[i] = CyDmaTdAllocate();
+        VdacOutDmaTd_R[i] = CyDmaTdAllocate();
+        I2SDmaTd[i] = CyDmaTdAllocate();
+    }
+
+    /* Configure DMA transfer descriptors. */
+    for (i = 0u; i < (NUM_OF_BUFFERS - 1u); ++i) {
+        /* Chain current and next DMA transfer descriptors to be in row. */
+        CyDmaTdSetConfiguration(VdacOutDmaTd_L[i], TRANSFER_SIZE, VdacOutDmaTd_L[i + 1u],
+                                (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
+        CyDmaTdSetConfiguration(VdacOutDmaTd_R[i], TRANSFER_SIZE, VdacOutDmaTd_R[i + 1u],
+                                (TD_INC_SRC_ADR));
+        CyDmaTdSetConfiguration(I2SDmaTd[i], I2S_TRANSFER_SIZE, I2SDmaTd[i + 1u],
+                                (TD_INC_SRC_ADR | I2S_DMA_TD_TERMOUT_EN));
+    }
+    /* Chain last and 1st DMA transfer descriptors to make cyclic buffer. */
+    CyDmaTdSetConfiguration(VdacOutDmaTd_L[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_L[0u],
+                            (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
+    CyDmaTdSetConfiguration(VdacOutDmaTd_R[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_R[0u],
+                            (TD_INC_SRC_ADR));
+    CyDmaTdSetConfiguration(I2SDmaTd[NUM_OF_BUFFERS - 1u], I2S_TRANSFER_SIZE, I2SDmaTd[0u],
+                            (TD_INC_SRC_ADR | I2S_DMA_TD_TERMOUT_EN));
+
+
+    for (i = 0u; i < NUM_OF_BUFFERS; i++) {
+        /* Set source and destination addresses. */
+        CyDmaTdSetAddress(VdacOutDmaTd_L[i], LO16((uint32) &soundBuffer_L[i * TRANSFER_SIZE]),
+                          LO16((uint32) VDAC8_L_Data_PTR));
+        CyDmaTdSetAddress(VdacOutDmaTd_R[i], LO16((uint32) &soundBuffer_R[i * TRANSFER_SIZE]),
+                          LO16((uint32) VDAC8_R_Data_PTR));
+        CyDmaTdSetAddress(I2SDmaTd[i], LO16((uint32) &soundBuffer_I2S[i * I2S_TRANSFER_SIZE]),
+                          LO16((uint32) I2S_TX_CH0_F0_PTR));
+    }
+    
+    /* Set initial TD. */
+    setInitialTD();
+}
+
+void resetDMAs() {
+    #if 0
+    CyDmaClearPendingDrq(VdacOutDmaCh_L);
+    CyDmaClearPendingDrq(VdacOutDmaCh_R);
+    CyDmaClearPendingDrq(I2SDmaCh);
+    CyDmaChSetRequest(VdacOutDmaCh_L, CPU_TERM_TD);
+    CyDmaChSetRequest(VdacOutDmaCh_R, CPU_TERM_TD);
+    CyDmaChSetRequest(I2SDmaCh, CPU_TERM_TD);
+    #endif
+    
+    /* Stop DMA operation. */
+    CyDmaChDisable(VdacOutDmaCh_L);
+    CyDmaChDisable(VdacOutDmaCh_R);
+    CyDmaChDisable(I2SDmaCh);
+
+    /* Set initial TD. */
+    setInitialTD();
+}
+
+void setInitialTD() {
+    /* Set 1st transfer descriptor to execute. */
+    CyDmaChSetInitialTd(VdacOutDmaCh_L, VdacOutDmaTd_L[0u]);
+    CyDmaChSetInitialTd(VdacOutDmaCh_R, VdacOutDmaTd_R[0u]);
+    CyDmaChSetInitialTd(I2SDmaCh, I2SDmaTd[0u]);
+    
+    /* Start DMA operation. */
+    CyDmaChEnable(VdacOutDmaCh_L, VDAC_DMA_ENABLE_PRESERVE_TD);
+    CyDmaChEnable(VdacOutDmaCh_R, VDAC_DMA_ENABLE_PRESERVE_TD);
+    CyDmaChEnable(I2SDmaCh, I2S_DMA_ENABLE_PRESERVE_TD);
+
+    inIndex=0u;
+    outIndex=0u;
+}
+
 
 /* [] END OF FILE */
