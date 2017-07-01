@@ -127,7 +127,6 @@ volatile uint8 flag = 0u;
 #define DMA_STOP_FLAG            (1u<<1)
 #define USB_DROP_FLAG            (1u<<2)
 
-uint32 currentFs();
 void initDMAs();
 
 /*******************************************************************************
@@ -247,8 +246,6 @@ int main() {
     for (;;) {
         /* Check if configuration or interface settings are changed. */
         if (0u != USBFS_IsConfigurationChanged()) {
-            dp("[USB Configuration Changed]");
-
             /* Check active alternate setting. */
             if ( (0u != USBFS_GetConfiguration()) && (0u != USBFS_GetInterfaceSetting(AUDIO_INTERFACE)) ) {
                 /* Alternate settings 1: Audio is streaming. */
@@ -265,15 +262,12 @@ int main() {
                 vcoCountWait = 4;
                 vcoFreq = 0;
 
-                /* Get current sampling frequency. */
-                fs = (fs == 0) ? currentFs() : fs;
-
                 /* Enable OUT endpoint to receive audio stream. */
                 USBFS_EnableOutEP(OUT_EP_NUM);
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio ON ");
-                dp(" Audio=[ON]");
+                dp("Audio=[ON]\n");
             } else {
                 /* Alternate settings 0: Audio is not streaming (mute). */
 
@@ -286,23 +280,28 @@ int main() {
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio OFF");
-                dp(" Audio=[OFF]");
+                dp("\nAudio=[OFF]\n");
             }
 
-            /* Check if sample frequency is changed by host. */
-            if ((USBFS_frequencyChanged != 0u) && (USBFS_transferState == USBFS_TRANS_STATE_IDLE)) {
-                USBFS_frequencyChanged = 0u;
-
-                /* Get current sampling frequency. */
-                fs = currentFs();
-
-                sprintf(dbuf, "%4.1fkHz", fs/1000.0);
-                CharLCD_Position(1u, 0u);
-                CharLCD_PrintString(dbuf);
-                sprintf(dbuf, " Freq=[%4.1fkHz]", fs/1000.0); dp(dbuf);
+            if (USBFS_GetConfiguration() != 0u) {
+                /* Enable OUT endpoint to receive data from host. */
+                USBFS_EnableOutEP(OUT_EP_NUM);
             }
-            
-            dp("\n");
+        }
+
+        /* Check if sample frequency is changed by host. */
+        if ((USBFS_frequencyChanged != 0u) && (USBFS_transferState == USBFS_TRANS_STATE_IDLE)) {
+            /* Get current sampling frequency. */
+            fs = USBFS_currentSampleFrequency[OUT_EP_NUM][0] +
+                 (USBFS_currentSampleFrequency[OUT_EP_NUM][1]<<8) +
+                 (USBFS_currentSampleFrequency[OUT_EP_NUM][2]<<16);
+
+            sprintf(dbuf, "%4.1fkHz", fs/1000.0);
+            CharLCD_Position(1u, 0u);
+            CharLCD_PrintString(dbuf);
+            sprintf(dbuf, "Freq=[%4.1fkHz]\n", fs/1000.0); dp(dbuf);
+
+            USBFS_frequencyChanged = 0u;
         }
 
         /* Check if EP buffer is full. */
@@ -484,13 +483,6 @@ CY_ISR(VdacDmaDone) {
         flag &= ~DMA_STOP_FLAG;
     }
 
-}
-
-uint32 currentFs() {
-    uint32 fs = USBFS_currentSampleFrequency[OUT_EP_NUM][0] +
-                (USBFS_currentSampleFrequency[OUT_EP_NUM][1]<<8) +
-                (USBFS_currentSampleFrequency[OUT_EP_NUM][2]<<16);
-    return fs;
 }
 
 void initDMAs() {
