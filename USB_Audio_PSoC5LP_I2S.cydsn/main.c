@@ -84,7 +84,7 @@ CY_ISR_PROTO(VdacDmaDone);
 
 /* Configuration for I2S clock generator (VCO) adjustment. */
 #define adjustInterval              (10u)
-#define adjustTic                   (vctrl/10000.0*0.3 * fabs(distAverage-sHALF_BUFFER_SIZE)*0.01)
+#define adjustTic                   (vctrl/10000.0*0.4 * fabs(distAverage-sHALF_BUFFER_SIZE)*0.05*2)
 #define UpperAdjustRange            (+(int16)TRANSFER_SIZE*3/2)
 #define LowerAdjustRange            (-(int16)TRANSFER_SIZE*3/2)
 #define MovingAverageWeight         (fs/100000.0*0.01)
@@ -111,6 +111,7 @@ struct _EZI2C_buf {
     uint16 distAvrerage;
     int16 distAvDiff;
     int16 clockAdjust;
+    float vcoFreq;
     uint16 vctrl;
     uint8 L;
     uint8 R;
@@ -128,6 +129,13 @@ volatile uint8 flag = 0u;
 #define USB_DROP_FLAG            (1u<<2)
 
 void initDMAs();
+
+/* Variables for VCO frequency update. */
+volatile uint16 lastVcoCount = 0;
+volatile uint16 vcoCount = 0;
+volatile float vcoFreqency = 0;
+volatile uint8 vcoCountWait = 0;
+float tmpVcoFreq;
 
 /*******************************************************************************
 * Function Name: main
@@ -155,7 +163,6 @@ void initDMAs();
 *  None.
 *
 *******************************************************************************/
-float tmpVcoFreq;
 
 int main() {
     uint8 i;
@@ -175,13 +182,9 @@ int main() {
     uint16 vctrl;
     float vctrlAdj = 0;
 
-    uint16 lastVcoCount = 0;
-    uint16 vcoCount = 0;
-    float vcoFreq = 0;
-    uint8 vcoCountWait = 0;
-
     uint8 freqCtrlCount = 0;
-
+    volatile float vcoFreq=0;
+    
     /* Start UART for debug print. */
     DP_Start();
     dp("\n\n");
@@ -260,7 +263,7 @@ int main() {
                 adjustIntervalCount = 0u;
                 lastVcoCount = 0;
                 vcoCountWait = 4;
-                vcoFreq = 0;
+                vcoFreqency = 0;
 
                 /* Enable OUT endpoint to receive audio stream. */
                 USBFS_EnableOutEP(OUT_EP_NUM);
@@ -306,6 +309,8 @@ int main() {
 
         /* Check if EP buffer is full. */
         if (USBFS_OUT_BUFFER_FULL == USBFS_GetEPState(OUT_EP_NUM)) {
+            vcoFreq = vcoFreqency;
+            
             if (0u == skipNextOut) {
                 readSize = USBFS_GetEPCount(OUT_EP_NUM);
                 /* Trigger DMA to copy data from OUT endpoint buffer. */
@@ -330,7 +335,7 @@ int main() {
                 dist = (inIndex - outIndex*TRANSFER_SIZE + BUFFER_SIZE)%BUFFER_SIZE;
 
                 /* Enable DMA transfers when sound buffer is half-full. */
-                if ((0u == syncDma) && (dist > sHALF_BUFFER_SIZE)) {
+                if ((0u == syncDma) && (dist >= sHALF_BUFFER_SIZE)) {
                     /* Disable underflow delayed start. */
                     syncDma = 1u;
                     lastDistAverage = distAverage = dist;
@@ -347,6 +352,7 @@ int main() {
                  */
                 USBFS_EnableOutEP(OUT_EP_NUM);
                 skipNextOut = 0u;
+                dist = (inIndex - outIndex*TRANSFER_SIZE + BUFFER_SIZE)%BUFFER_SIZE;
             }
 
             distAverage = distAverage*(1-MovingAverageWeight) + dist*MovingAverageWeight;
@@ -359,10 +365,10 @@ int main() {
                     distAvDiff = distAverage - lastDistAverage;
                     lastDistAverage = distAverage;
 
-                    if (++freqCtrlCount > 5) {
+                    if (++freqCtrlCount > 4) {
                         freqCtrlCount = 0;
                         if (fs > 1 && vcoFreq > 1) {
-                            float d = vcoFreq-fs;
+                            float d = vcoFreq -fs;
                             if ( fabs(d/fs) > (1/100.0)) {
                                 /* Rapid (coarse) frequency adjustment. */
                                 vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.3;
@@ -372,12 +378,13 @@ int main() {
                                 sprintf(dbuf, "initialVctrl=%d vctrlAdj=%f ", initialVctrl, vctrlAdj); dp(dbuf);
                                 sprintf(dbuf, "vcoFreq=%f vctrl=%f\n", vcoFreq, initialVctrl+vctrlAdj); dp(dbuf);
                                 #endif
-                            } else if ( fabs(d/fs) > (1/200.0)) {
+                            } else if ( fabs(d/fs) > (1/150.0)) {
                                 /* Slower (fine) frequency adjustment. */
                                 vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.03;
                                 dp("1");
                             } else {
                                 /* Precise frequency adjustment. */
+                                //vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.003;
                                 vctrlAdj += (1/fs-1/vcoFreq) * (initialVctrl+vctrlAdj)/(1/vcoFreq)*0.02;
 
                                 clockAdjust = 0;
@@ -409,18 +416,6 @@ int main() {
                 }
             }
 
-            /* Measure VCO Frequency. */
-            vcoCount = VCO_Counter_COUNTER_LSB;
-            tmpVcoFreq = (((uint32)vcoCount - (uint32)lastVcoCount + 65536ul)%65536ul)*1000/64.0;
-            lastVcoCount = vcoCount;
-            if (tmpVcoFreq > 0) {
-                if (vcoCountWait > 0u) {
-                    vcoCountWait--;
-                } else {
-                    vcoFreq = (vcoFreq == 0) ? tmpVcoFreq : vcoFreq*0.9 + tmpVcoFreq*0.1;
-                }
-            }
-
             /* If EZI2C is idle, then update monitoring values. */
             if ( (EZI2C_GetActivity() & EZI2C_STATUS_BUSY) == 0u ) {
                 EZI2C_buf.dist = dist;
@@ -428,6 +423,7 @@ int main() {
                 EZI2C_buf.distAvDiff = distAvDiff;
                 EZI2C_buf.clockAdjust = clockAdjust;
                 EZI2C_buf.vctrl = vctrl;
+                EZI2C_buf.vcoFreq = vcoFreq;
                 EZI2C_buf.L = VDAC8_L_Data;
                 EZI2C_buf.R = VDAC8_R_Data;
                 EZI2C_buf.flag = flag;
@@ -546,4 +542,19 @@ void initDMAs() {
     CyDmaChEnable(I2SDmaCh, I2S_DMA_ENABLE_PRESERVE_TD);
 }
 
+void USBFS_SOF_ISR_EntryCallback(void);
+void USBFS_SOF_ISR_EntryCallback() {
+    /* Measure VCO Frequency. */
+    vcoCount = VCO_Counter_COUNTER_LSB;
+    tmpVcoFreq = (((uint32)vcoCount - (uint32)lastVcoCount + 0x10000)%0x10000)*1000/64.0;
+    lastVcoCount = vcoCount;
+    if (tmpVcoFreq > 0) {
+        if (vcoCountWait > 0u) {
+            vcoCountWait--;
+        } else {
+            vcoFreqency = (vcoFreqency == 0) ? tmpVcoFreq : vcoFreqency*0.8 + tmpVcoFreq*0.2;
+            //vcoFreqency = tmpVcoFreq;
+        }
+    }
+}
 /* [] END OF FILE */

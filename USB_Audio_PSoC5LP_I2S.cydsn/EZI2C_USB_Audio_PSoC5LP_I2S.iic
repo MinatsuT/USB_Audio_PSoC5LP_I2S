@@ -1,1 +1,1 @@
-s 10 00 s 11 @0dist @1dist @0distAV @1distAV @0distAVDiff @1distAVDiff @0clkAdj @1clkAdj @0V @1V @L @R @flag p
+s 10 00 s 11 @0dist @1dist @0distAV @1distAV @0distAVDiff @1distAVDiff @0clkAdj @1clkAdj @0vcoFreq @1vcoFreq @2vcoFreq @3vcoFreq @0V @1V @L @R @flag p
