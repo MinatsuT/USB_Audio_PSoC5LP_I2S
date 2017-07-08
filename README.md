@@ -25,7 +25,8 @@ P12[3] --- I2S WS (a.k.a. LRCLK)
 P12[4] --- I2S SDO (a.k.a. SDATA)
 </pre>
 
-![Breadboard image](https://raw.githubusercontent.com/MinatsuT/USB_Audio_PSoC5LP_I2S/PWM-controlled/breadboard_image.jpg)
+![Breadboard
+ image](https://raw.githubusercontent.com/MinatsuT/USB_Audio_PSoC5LP_I2S/master/breadboard_image.jpg)
 
 # Included community components
 This project contains [CharLCD_I2C_v1_5](http://japan.cypress.com/forum/psoc-community-components/charlcdi2c-component-interface-pcf8574at-hd44780-combo?page=2) which is a "CharLCD_I2C Component interface for PCF8574AT / HD44780 Combo a.k.a 'LCD1602 with I2C backpack' designed for Arduino" posted by Michael Bey.
