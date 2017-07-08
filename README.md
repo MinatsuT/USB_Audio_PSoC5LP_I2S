@@ -9,8 +9,6 @@ Features:
 
 # Required parts
 - PSoC5LP Prototyping Kit (CY8CKIT-059)
-- Capacitors: C1(100pF), C2(1uF)
-- Resister: R1(100k Ohm)
 - 3.3V logic external I2S DAC with self MASTER CLOCK generation capability [optional]
 - 16x2 Character LCD (LCD1602) with I2C backpack [optional]
 
@@ -25,12 +23,6 @@ P1[7] --- LCD1602 I2C SCL
 P12[2] --- I2S SCK (a.k.a. BCLK)
 P12[3] --- I2S WS (a.k.a. LRCLK)
 P12[4] --- I2S SDO (a.k.a. SDATA)
-
-P15[0] --- C1(100pF) --- GND
-
-P15[2] --+
-         R1(100k Ohm)
-P15[5] --+-- C2(1uF) --- GND
 </pre>
 
 ![Breadboard image](https://raw.githubusercontent.com/MinatsuT/USB_Audio_PSoC5LP_I2S/PWM-controlled/breadboard_image.jpg)
