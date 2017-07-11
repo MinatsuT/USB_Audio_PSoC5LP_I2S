@@ -339,6 +339,9 @@ int main() {
 * Initialize components.
 *******************************************************************************/
 void initComponents() {
+    /* Enable global interrupts. */
+    CyGlobalIntEnable;
+    
     /* Start UART for debug print. */
     DP_Start();
 
@@ -346,27 +349,18 @@ void initComponents() {
     EZI2C_SetBuffer1(sizeof(EZI2C_buf), 0, (void *)&EZI2C_buf);
     EZI2C_Start();
 
+    /* "Stop" BitClk Generator. */
+    FracDiv_Stop();
+    
     /* Start BitClk_Counter. */
     BitClk_Counter_Start();
 
     /* Start BitClkFrequency capture event ISR. */
     FreqCapt_StartEx(&FreqCapt);
 
-    /* "Stop" BitClk Generator. */
-    FracDiv_Stop();
-
     /* Start VDAC8 to generate output wave. */
     VDAC8_L_Start();
     VDAC8_R_Start();
-
-    /* Initialize DMAs. */
-    initDMAs();
-
-    /* Start DMA completion ISR. */
-    VdacDmaDone_StartEx(&VdacDmaDone);
-
-    /* Enable global interrupts. */
-    CyGlobalIntEnable;
 
     /* Start LCD display for indication. */
     I2C_CharLCD_Start();
@@ -382,6 +376,12 @@ void initComponents() {
     /* Start I2S */
     I2S_Start();
     I2S_EnableTx();
+
+    /* Initialize DMAs. */
+    initDMAs();
+
+    /* Start DMA completion ISR. */
+    VdacDmaDone_StartEx(&VdacDmaDone);
 }
 
 /*******************************************************************************
