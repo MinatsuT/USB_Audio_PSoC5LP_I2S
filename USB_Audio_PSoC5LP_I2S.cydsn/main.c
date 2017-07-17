@@ -467,11 +467,11 @@ void initDMAs() {
 uint16 getOutIndexVDAC() {
     uint8 td;
     CyDmaChStatus(VdacOutDmaCh_L, &td, NULL);
+    uint16 count;
+    CyDmaTdGetConfiguration(td, &count, NULL, NULL);
 
     for (uint8 i = 0u; i < NUM_OF_BUFFERS; ++i) {
         if (td == VdacOutDmaTd_L[i]) {
-            uint16 count;
-            CyDmaTdGetConfiguration(td, &count, NULL, NULL);
             return (i+1)*TRANSFER_SIZE-count;
         }
     }
@@ -485,11 +485,11 @@ uint16 getOutIndexVDAC() {
 uint16 getOutIndexI2S() {
     uint8 td;
     CyDmaChStatus(I2SDmaCh, &td, NULL);
+    uint16 count;
+    CyDmaTdGetConfiguration(td, &count, NULL, NULL);
 
     for (uint8 i = 0u; i < NUM_OF_BUFFERS; ++i) {
         if (td == I2SDmaTd[i]) {
-            uint16 count;
-            CyDmaTdGetConfiguration(td, &count, NULL, NULL);
             return ((i+1)*I2S_TRANSFER_SIZE-count)*TRANSFER_SIZE/I2S_TRANSFER_SIZE;
         }
     }
