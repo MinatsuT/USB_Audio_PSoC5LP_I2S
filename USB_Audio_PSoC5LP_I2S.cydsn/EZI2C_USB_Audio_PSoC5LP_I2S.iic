@@ -1,1 +1,1 @@
-s 10 00 s 11 @0bitClkFreq @1bitClkFreq @2bitClkFreq @3bitClkFreq @0div @1div @2div @3div @0dist @1dist @0distAV @1distAV @0clkAdj @1clkAdj @L @R @flag p
+s 10 00 s 11 @0bitClkFreq @1bitClkFreq @2bitClkFreq @3bitClkFreq @0div @1div @2div @3div @0dist @1dist @0distAV @1distAV @0clkAdj @1clkAdj @0ioDiffVDAC @1ioDiffVDAC @0ioDiffI2S @1ioDiffI2S @L @R @flag p

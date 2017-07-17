@@ -17,7 +17,7 @@
 #define USB_BUF_SIZE        (384u)
 
 /* Audio buffer constants. */
-#define TRANSFER_SIZE       (384u/AUDIO_CH/BYTES_PER_CH)
+#define TRANSFER_SIZE       (USB_BUF_SIZE/AUDIO_CH/BYTES_PER_CH)
 #define NUM_OF_BUFFERS      (10u)
 #define BUFFER_SIZE         (TRANSFER_SIZE * NUM_OF_BUFFERS)
 #define sHALF_BUFFER_SIZE   ((int16)(BUFFER_SIZE/2u))
@@ -90,6 +90,8 @@ struct _EZI2C_buf {
     uint16 dist;
     uint16 distAvrerage;
     int16 clockAdjust;
+    int16 inOutDiffVDAC;
+    int16 inOutDiffI2S;
     uint8 L;
     uint8 R;
     uint8 flag;
@@ -108,6 +110,8 @@ volatile uint8 flag = 0u;
 /* Function prototype deffinitions. */
 void initComponents(void);
 void initDMAs(void);
+uint16 getOutIndexVDAC(void);
+uint16 getOutIndexI2S(void);
 CY_ISR_PROTO(VdacDmaDone);
 CY_ISR_PROTO(FreqCapt);
 
@@ -128,6 +132,7 @@ int main() {
     uint32 tmpDiv = 0;
 
     /* Variables for BitClk frequency control. */
+    uint16 dist0;
     uint16 dist;
     float distAverage;
     uint16 adjustIntervalCount = 0u;
@@ -136,6 +141,8 @@ int main() {
 
     /* Variables used to manage DMA. */
     uint8 syncDma = 0u;
+    uint16 currentOutIndexVDAC = 0u;
+    uint16 currentOutIndex = 0u;
 
     /* Initialize components. */
     initComponents();
@@ -229,14 +236,20 @@ int main() {
                 USBFS_frequencyChanged = 0u;
             }
         }
-        
+
         /*******************************************************************************
         * Receive data from USB and extract into audio buffers.
         *******************************************************************************/
         if (USBFS_OUT_BUFFER_FULL == USBFS_GetEPState(OUT_EP_NUM)) {
             bitClkFreq = bitClkFrequency;
 
+            /* Aquire received data size. */
             readSize = USBFS_GetEPCount(OUT_EP_NUM);
+
+            /* Get current output index of DMA. */
+            currentOutIndexVDAC = getOutIndexVDAC();
+            currentOutIndex = getOutIndexI2S();
+
             /* Trigger DMA to copy data from OUT endpoint buffer. */
             USBFS_ReadOutEP(OUT_EP_NUM, tmpEpBuf, readSize);
 
@@ -256,7 +269,8 @@ int main() {
                 soundBuffer_I2S[inIndex*I2S_DATA_SIZE+3] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +2];
                 inIndex = (inIndex+1) % BUFFER_SIZE;
             }
-            dist = (inIndex - outIndex*TRANSFER_SIZE + BUFFER_SIZE)%BUFFER_SIZE;
+            dist0 = (inIndex - outIndex*TRANSFER_SIZE + BUFFER_SIZE)%BUFFER_SIZE;
+            dist = (inIndex - currentOutIndex + BUFFER_SIZE)%BUFFER_SIZE;
             distAverage = distAverage*(1-MovingAverageWeight) + dist*MovingAverageWeight;
 
             /* Start DMA transfers when half of the sound buffer is fulfilled. */
@@ -324,9 +338,11 @@ int main() {
             if ( (EZI2C_GetActivity() & EZI2C_STATUS_BUSY) == 0u ) {
                 EZI2C_buf.bitClkFreqency = bitClkFrequency;
                 EZI2C_buf.div = div;
-                EZI2C_buf.dist = dist;
+                EZI2C_buf.dist = dist0;
                 EZI2C_buf.distAvrerage = distAverage;
                 EZI2C_buf.clockAdjust = clockAdjust;
+                EZI2C_buf.inOutDiffVDAC = (inIndex - currentOutIndexVDAC + BUFFER_SIZE)%BUFFER_SIZE;
+                EZI2C_buf.inOutDiffI2S = (inIndex - currentOutIndex + BUFFER_SIZE)%BUFFER_SIZE;
                 EZI2C_buf.L = VDAC8_L_Data;
                 EZI2C_buf.R = VDAC8_R_Data;
                 EZI2C_buf.flag = flag;
@@ -341,7 +357,7 @@ int main() {
 void initComponents() {
     /* Enable global interrupts. */
     CyGlobalIntEnable;
-    
+
     /* Start UART for debug print. */
     DP_Start();
 
@@ -351,7 +367,7 @@ void initComponents() {
 
     /* "Stop" BitClk Generator. */
     FracDiv_Stop();
-    
+
     /* Start BitClk_Counter. */
     BitClk_Counter_Start();
 
@@ -443,6 +459,42 @@ void initDMAs() {
     CyDmaChEnable(VdacOutDmaCh_L, VDAC_DMA_ENABLE_PRESERVE_TD);
     CyDmaChEnable(VdacOutDmaCh_R, VDAC_DMA_ENABLE_PRESERVE_TD);
     CyDmaChEnable(I2SDmaCh, I2S_DMA_ENABLE_PRESERVE_TD);
+}
+
+/*******************************************************************************
+*  Get current VDAC DMA transfer point.
+*******************************************************************************/
+uint16 getOutIndexVDAC() {
+    uint8 td;
+    CyDmaChStatus(VdacOutDmaCh_L, &td, NULL);
+
+    for (uint8 i = 0u; i < NUM_OF_BUFFERS; ++i) {
+        if (td == VdacOutDmaTd_L[i]) {
+            uint16 count;
+            CyDmaTdGetConfiguration(td, &count, NULL, NULL);
+            return (i+1)*TRANSFER_SIZE-count;
+        }
+    }
+
+    return 0;
+}
+
+/*******************************************************************************
+*  Get current I2S DMA transfer point.
+*******************************************************************************/
+uint16 getOutIndexI2S() {
+    uint8 td;
+    CyDmaChStatus(I2SDmaCh, &td, NULL);
+
+    for (uint8 i = 0u; i < NUM_OF_BUFFERS; ++i) {
+        if (td == I2SDmaTd[i]) {
+            uint16 count;
+            CyDmaTdGetConfiguration(td, &count, NULL, NULL);
+            return ((i+1)*I2S_TRANSFER_SIZE-count)*TRANSFER_SIZE/I2S_TRANSFER_SIZE;
+        }
+    }
+
+    return 0;
 }
 
 /*******************************************************************************
