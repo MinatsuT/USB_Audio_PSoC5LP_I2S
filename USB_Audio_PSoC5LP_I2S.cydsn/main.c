@@ -46,7 +46,8 @@ uint8 VdacOutDmaTd_R[NUM_OF_BUFFERS];
 #define VDAC_DMA_REQUEST_PER_BURST  (1u)
 #define VDAC_DMA_TD_TERMOUT_EN      (VdacDma_L__TD_TERMOUT_EN)
 #define VDAC_DMA_DST_BASE           (CYDEV_PERIPH_BASE)
-#define VDAC_DMA_SRC_BASE           (CY_PSOC5LP) ? ((uint32) soundBuffer_L) : (CYDEV_SRAM_BASE)
+#define VDAC_DMA_SRC_BASE_L         (CY_PSOC5LP) ? ((uint32) soundBuffer_L) : (CYDEV_SRAM_BASE)
+#define VDAC_DMA_SRC_BASE_R         (CY_PSOC5LP) ? ((uint32) soundBuffer_R) : (CYDEV_SRAM_BASE)
 #define VDAC_DMA_ENABLE_PRESERVE_TD (1u)
 
 /* Variables for I2S_DMA. */
@@ -58,7 +59,7 @@ uint8 I2SDmaTd[NUM_OF_BUFFERS];
 #define I2S_DMA_REQUEST_PER_BURST  (1u)
 #define I2S_DMA_TD_TERMOUT_EN      (I2S_DMA__TD_TERMOUT_EN)
 #define I2S_DMA_DST_BASE           (CYDEV_PERIPH_BASE)
-#define I2S_DMA_SRC_BASE           (CY_PSOC5LP) ? ((uint32) soundBuffer_L) : (CYDEV_SRAM_BASE)
+#define I2S_DMA_SRC_BASE           (CY_PSOC5LP) ? ((uint32) soundBuffer_I2S) : (CYDEV_SRAM_BASE)
 #define I2S_DMA_ENABLE_PRESERVE_TD (1u)
 
 /* Configuration for I2S BitClk generator adjustment. */
@@ -274,7 +275,7 @@ int main() {
             distAverage = distAverage*(1-MovingAverageWeight) + dist*MovingAverageWeight;
 
             /* Start DMA transfers when half of the sound buffer is fulfilled. */
-            if (!syncDma && (dist >= sHALF_BUFFER_SIZE)) {
+            if (!syncDma && (dist >= sHALF_BUFFER_SIZE/2)) {
                 /* Disable underflow delayed start. */
                 syncDma = 1u;
 
@@ -408,9 +409,9 @@ void initDMAs() {
 
     /* Initialize DMA channel. */
     VdacOutDmaCh_L = VdacDma_L_DmaInitialize(VDAC_DMA_BYTES_PER_BURST, VDAC_DMA_REQUEST_PER_BURST,
-                                             HI16(VDAC_DMA_SRC_BASE), HI16(VDAC_DMA_DST_BASE));
+                                             HI16(VDAC_DMA_SRC_BASE_L), HI16(VDAC_DMA_DST_BASE));
     VdacOutDmaCh_R = VdacDma_R_DmaInitialize(VDAC_DMA_BYTES_PER_BURST, VDAC_DMA_REQUEST_PER_BURST,
-                                             HI16(VDAC_DMA_SRC_BASE), HI16(VDAC_DMA_DST_BASE));
+                                             HI16(VDAC_DMA_SRC_BASE_R), HI16(VDAC_DMA_DST_BASE));
     I2SDmaCh = I2S_DMA_DmaInitialize(I2S_DMA_BYTES_PER_BURST, I2S_DMA_REQUEST_PER_BURST,
                                      HI16(I2S_DMA_SRC_BASE), HI16(I2S_DMA_DST_BASE));
 
@@ -420,27 +421,18 @@ void initDMAs() {
         VdacOutDmaTd_R[i] = CyDmaTdAllocate();
         I2SDmaTd[i] = CyDmaTdAllocate();
     }
-
+    
     /* Configure DMA transfer descriptors. */
-    for (i = 0u; i < (NUM_OF_BUFFERS - 1u); ++i) {
+    for (i = 0u; i < NUM_OF_BUFFERS; ++i) {
         /* Chain current and next DMA transfer descriptors to be in row. */
-        CyDmaTdSetConfiguration(VdacOutDmaTd_L[i], TRANSFER_SIZE, VdacOutDmaTd_L[i + 1u],
+        /* Last and 1st DMA transfer descriptors to make cyclic buffer. */
+        CyDmaTdSetConfiguration(VdacOutDmaTd_L[i], TRANSFER_SIZE, VdacOutDmaTd_L[(i + 1u)%NUM_OF_BUFFERS],
                                 (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
-        CyDmaTdSetConfiguration(VdacOutDmaTd_R[i], TRANSFER_SIZE, VdacOutDmaTd_R[i + 1u],
+        CyDmaTdSetConfiguration(VdacOutDmaTd_R[i], TRANSFER_SIZE, VdacOutDmaTd_R[(i + 1u)%NUM_OF_BUFFERS],
                                 (TD_INC_SRC_ADR));
-        CyDmaTdSetConfiguration(I2SDmaTd[i], I2S_TRANSFER_SIZE, I2SDmaTd[i + 1u],
+        CyDmaTdSetConfiguration(I2SDmaTd[i], I2S_TRANSFER_SIZE, I2SDmaTd[(i + 1u)%NUM_OF_BUFFERS],
                                 (TD_INC_SRC_ADR));
-    }
-    /* Chain last and 1st DMA transfer descriptors to make cyclic buffer. */
-    CyDmaTdSetConfiguration(VdacOutDmaTd_L[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_L[0u],
-                            (TD_INC_SRC_ADR | VDAC_DMA_TD_TERMOUT_EN));
-    CyDmaTdSetConfiguration(VdacOutDmaTd_R[NUM_OF_BUFFERS - 1u], TRANSFER_SIZE, VdacOutDmaTd_R[0u],
-                            (TD_INC_SRC_ADR));
-    CyDmaTdSetConfiguration(I2SDmaTd[NUM_OF_BUFFERS - 1u], I2S_TRANSFER_SIZE, I2SDmaTd[0u],
-                            (TD_INC_SRC_ADR));
 
-
-    for (i = 0u; i < NUM_OF_BUFFERS; i++) {
         /* Set source and destination addresses. */
         CyDmaTdSetAddress(VdacOutDmaTd_L[i], LO16((uint32) &soundBuffer_L[i * TRANSFER_SIZE]),
                           LO16((uint32) VDAC8_L_Data_PTR));
