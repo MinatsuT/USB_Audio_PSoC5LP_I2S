@@ -34,6 +34,10 @@ uint8 soundBuffer_R[BUFFER_SIZE];
 uint8 soundBuffer_I2S[I2S_BUFFER_SIZE];
 volatile uint16 outIndex = 0u;
 volatile uint16 inIndex = 0u;
+#define BUFFERED_DATA_SIZE          ((BUFFER_SIZE+inIndex - outIndex*TRANSFER_SIZE)%BUFFER_SIZE)
+
+/* DMA sync flag. */
+volatile uint8 syncDma = 0u;
 
 /* Variables for VDACoutDMA. */
 uint8 VdacOutDmaCh_L;
@@ -82,7 +86,7 @@ float tmpBitClkFreq;
 
 /* Debug print buffer. */
 char dbuf[256];
-#define dp(x)                       DP_PutString(x);
+#define DP(...)                     {sprintf(dbuf, __VA_ARGS__); DP_PutString(dbuf);}
 
 /* EZI2C buffer watched by external device (PC). */
 struct _EZI2C_buf {
@@ -141,19 +145,18 @@ int main() {
     float bitClkFreq;
 
     /* Variables used to manage DMA. */
-    uint8 syncDma = 0u;
     uint16 currentOutIndexVDAC = 0u;
     uint16 currentOutIndex = 0u;
 
     /* Initialize components. */
     initComponents();
 
-    dp("\n\n");
-    dp("========================================\n");
-    dp(" PSoC USB Audio start.\n");
-    dp("========================================\n");
-    sprintf(dbuf, "BUFFER_SIZE=%d\n", BUFFER_SIZE); dp(dbuf);
-    sprintf(dbuf, "Sizeof(EZI2C_buf)=%d\n", sizeof(EZI2C_buf)); dp(dbuf);
+    DP("\n\n");
+    DP("========================================\n");
+    DP(" PSoC USB Audio start.\n");
+    DP("========================================\n");
+    DP("BUFFER_SIZE=%d\n", BUFFER_SIZE);
+    DP("Sizeof(EZI2C_buf)=%d\n", sizeof(EZI2C_buf));
 
     /* Start USBFS Operation with 5V operation. */
     USBFS_Start(USBFS_AUDIO_DEVICE, USBFS_5V_OPERATION);
@@ -187,7 +190,7 @@ int main() {
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio ON ");
-                dp("Audio=[ON]\n");
+                DP("Audio=[ON]\n");
             } else {
                 /* Alternate settings 0: Audio is not streaming (mute). */
 
@@ -200,7 +203,7 @@ int main() {
 
                 CharLCD_Position(0u, 0u);
                 CharLCD_PrintString("Audio OFF");
-                dp("\nAudio=[OFF]\n");
+                DP("\nAudio=[OFF]\n");
             }
 
             if (USBFS_GetConfiguration() != 0u) {
@@ -226,13 +229,13 @@ int main() {
                 div = initialDiv+divAdj;
                 FracDiv_Write(div, 0x7fffffffu);
 
-                sprintf(dbuf, "InitialDiv=[%ld]\n", div); dp(dbuf);
-                sprintf(dbuf, "NominalFreq=[%4.3fMHz]\n", ((float)DIVIDER_SOURCE_FREQ)*div/(float)0x7fffffffu/1000000.0); dp(dbuf);
+                DP("InitialDiv=[%ld]\n", div);
+                DP("NominalFreq=[%4.3fMHz]\n", ((float)DIVIDER_SOURCE_FREQ)*div/(float)0x7fffffffu/1000000.0);
 
                 sprintf(dbuf, "%4.1fkHz", fs/1000.0);
                 CharLCD_Position(1u, 0u);
                 CharLCD_PrintString(dbuf);
-                sprintf(dbuf, "Freq=[%4.1fkHz]\n", fs/1000.0); dp(dbuf);
+                DP(dbuf, "Freq=[%4.1fkHz]\n", fs/1000.0);
 
                 USBFS_frequencyChanged = 0u;
             }
@@ -260,22 +263,29 @@ int main() {
             /* Enable OUT endpoint to receive data from host. */
             USBFS_EnableOutEP(OUT_EP_NUM);
 
-            /* Separate 2-channel data and append into each buffer. */
-            for (i = 0u; i < readSize/(AUDIO_CH*BYTES_PER_CH); i++) {
-                soundBuffer_L[inIndex] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i + 1]+128u;
-                soundBuffer_R[inIndex] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i + 3]+128u;
-                soundBuffer_I2S[inIndex*I2S_DATA_SIZE+0] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +1];
-                soundBuffer_I2S[inIndex*I2S_DATA_SIZE+1] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +0];
-                soundBuffer_I2S[inIndex*I2S_DATA_SIZE+2] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +3];
-                soundBuffer_I2S[inIndex*I2S_DATA_SIZE+3] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +2];
-                inIndex = (inIndex+1) % BUFFER_SIZE;
+            /* Check if there is a room to receive data. */
+            if (BUFFERED_DATA_SIZE>BUFFER_SIZE-TRANSFER_SIZE) {
+                flag|=USB_DROP_FLAG;
+                DP("USB_DROP");
+            } else {
+                flag&=~USB_DROP_FLAG;
+                /* Separate 2-channel data and append into each buffer. */
+                for (i = 0u; i < readSize/(AUDIO_CH*BYTES_PER_CH); i++) {
+                    soundBuffer_L[inIndex] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i + 1]+128u;
+                    soundBuffer_R[inIndex] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i + 3]+128u;
+                    soundBuffer_I2S[inIndex*I2S_DATA_SIZE+0] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +1];
+                    soundBuffer_I2S[inIndex*I2S_DATA_SIZE+1] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +0];
+                    soundBuffer_I2S[inIndex*I2S_DATA_SIZE+2] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +3];
+                    soundBuffer_I2S[inIndex*I2S_DATA_SIZE+3] = tmpEpBuf[BYTES_PER_CH*AUDIO_CH*i +2];
+                    inIndex = (inIndex+1) % BUFFER_SIZE;
+                }
+                dist0 = (inIndex - outIndex*TRANSFER_SIZE + BUFFER_SIZE)%BUFFER_SIZE;
+                dist = (inIndex - currentOutIndex + BUFFER_SIZE)%BUFFER_SIZE;
+                distAverage = distAverage*(1-MovingAverageWeight) + dist*MovingAverageWeight;
             }
-            dist0 = (inIndex - outIndex*TRANSFER_SIZE + BUFFER_SIZE)%BUFFER_SIZE;
-            dist = (inIndex - currentOutIndex + BUFFER_SIZE)%BUFFER_SIZE;
-            distAverage = distAverage*(1-MovingAverageWeight) + dist*MovingAverageWeight;
-
+                
             /* Start DMA transfers when half of the sound buffer is fulfilled. */
-            if (!syncDma && (dist >= sHALF_BUFFER_SIZE/2)) {
+            if (!syncDma && (dist >= sHALF_BUFFER_SIZE)) {
                 /* Disable underflow delayed start. */
                 syncDma = 1u;
 
@@ -285,7 +295,9 @@ int main() {
                 /* Start BitClk Generator to start DMA transfer. */
                 FracDiv_Start();
 
-                sprintf(dbuf, "\nDMA Clock START dist=%d\n", dist); dp(dbuf);
+                flag &= ~DMA_STOP_FLAG;
+                
+                DP("\nDMA Clock START dist=%d\n", dist);
             }
 
             /*******************************************************************************
@@ -296,26 +308,26 @@ int main() {
                     adjustIntervalCount = 0u;
                     if (fs > 1 && bitClkFreq > 1) {
                         float d = bitClkFreq -fs;
-                        if ( fabs(d/fs) > (1/100.0)) {
+                        if (fabs(d/fs) > (1/100.0)) {
                             /* Rapid (coarse) frequency adjustment. */
                             divAdj += (initialDiv+divAdj)*(fs/bitClkFreq - 1.0)*0.8;
-                            dp("0");
-                        } else if ( fabs(d/fs) > (1/150.0)) {
+                            DP("0");
+                        } else if (fabs(d/fs) > (1/150.0)) {
                             /* Slower (fine) frequency adjustment. */
                             divAdj += (initialDiv+divAdj)*(fs/bitClkFreq - 1.0)*0.4;
-                            dp("1");
+                            DP("1");
                         } else {
                             /* Precise frequency adjustment. */
                             divAdj += (initialDiv+divAdj)*(fs/bitClkFreq - 1.0)*0.1;
 
                             clockAdjust = 0;
-                            /* Buffered size based precise adjustment. */
-                            /* If buffered size is over half and still increasing, then faster the clock (decrease the divider). */
+                            /* Buffered data size based precise adjustment. */
+                            /* If buffered data size is over half and still increasing, then set the clock faster (decrease the divider). */
                             if ( distAverage > (sHALF_BUFFER_SIZE+UpperAdjustRange)) {
                                 divAdj += adjustTic;
                                 clockAdjust = UpperAdjustRange;
                             }
-                            /* If buffered size is under half and still decreasing, then slower the clock (increase the divider). */
+                            /* If buffered size is under half and still decreasing, then set the clock slower (increase the divider). */
                             if ( distAverage < (sHALF_BUFFER_SIZE+LowerAdjustRange)) {
                                 divAdj -= adjustTic;
                                 clockAdjust = LowerAdjustRange;
@@ -348,6 +360,12 @@ int main() {
                 EZI2C_buf.R = VDAC8_R_Data;
                 EZI2C_buf.flag = flag;
             }
+        }
+        
+        if (syncDma && (flag & DMA_STOP_FLAG)) {
+            DP("DMA_STOP");
+            syncDma = 0u;
+            FracDiv_Stop();
         }
     }
 }
@@ -496,6 +514,9 @@ uint16 getOutIndexI2S() {
 CY_ISR(VdacDmaDone) {
     /* Move to next buffer location and adjust to be within buffer size. */
     outIndex = (outIndex + 1) % NUM_OF_BUFFERS;
+    if (BUFFERED_DATA_SIZE<TRANSFER_SIZE) {
+        flag |= DMA_STOP_FLAG;
+    }
 }
 
 /*******************************************************************************

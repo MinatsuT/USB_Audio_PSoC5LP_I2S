@@ -567,6 +567,7 @@
       <Data key="e851a3b9-efb8-48be-bbb8-b303b216c393" value="Pin_PWM" />
       <Data key="ec49dace-1fd4-43de-919e-7848c3967892" value="Test2" />
       <Data key="ed092b9b-d398-4703-be89-cebf998501f6" value="Tx_1" />
+      <Data key="f12be82d-1004-485a-8f8c-529e92c756f4" value="Pin_SrcClk_Monitor" />
     </Group>
   </Group>
   <Group key="Interrupt">
@@ -764,6 +765,11 @@
     <Group key="ed092b9b-d398-4703-be89-cebf998501f6">
       <Group key="0">
         <Data key="Port Format" value="12,7" />
+      </Group>
+    </Group>
+    <Group key="f12be82d-1004-485a-8f8c-529e92c756f4">
+      <Group key="0">
+        <Data key="Port Format" value="0,0" />
       </Group>
     </Group>
     <Group key="UnAssigned Pins">

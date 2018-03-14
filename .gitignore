@@ -2,6 +2,9 @@
 # .gitignore file for PSoC Creator 4.0
 #
 
+# Backup files
+Backup/*
+
 # User preferences
 *.cyprj.*
 *.cywrk.*
